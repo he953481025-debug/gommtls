@@ -83,7 +83,6 @@ func readServerHello(buf []byte) (*serverHello, error) {
 	}
 
 	x, y := elliptic.Unmarshal(curve, ecPoint)
-
 	hello.publicKey = &ecdsa.PublicKey{
 		Curve: curve,
 		X:     x,

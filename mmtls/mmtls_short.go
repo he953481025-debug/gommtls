@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -25,7 +24,6 @@ import (
 type MMTLSClientShort struct {
 	conn net.Conn
 
-	status int32
 
 	packetReader io.Reader
 
@@ -52,7 +50,7 @@ func (c *MMTLSClientShort) Request(host, path string, req []byte) ([]byte, error
 	}
 
 	if c.conn == nil {
-		conn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", host, 80))
+		conn, err := net.Dial("tcp", net.JoinHostPort(host, "80"))
 		if err != nil {
 			return nil, err
 		}
@@ -66,8 +64,13 @@ func (c *MMTLSClientShort) Request(host, path string, req []byte) ([]byte, error
 	}
 
 	_, err = c.conn.Write(httpPacket)
-
+	if err != nil {
+		return nil, err
+	}
 	response, err := c.parseResponse(c.conn)
+	if err != nil {
+		return nil, err
+	}
 	log.Debugf("Receive response:\n%s\n", hex.Dump(response))
 
 	c.packetReader = bytes.NewReader(response)
@@ -229,8 +232,7 @@ func (c *MMTLSClientShort) parseResponse(conn net.Conn) ([]byte, error) {
 
 	b := new(bytes.Buffer)
 	io.Copy(b, resp.Body)
-	resp.Body.Close()
-	resp.Body = ioutil.NopCloser(b)
+	defer resp.Body.Close()
 
 	return b.Bytes(), nil
 }

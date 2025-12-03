@@ -2,7 +2,8 @@ package mmtls
 
 import (
 	"bytes"
-	"io/ioutil"
+	"os"
+	"io"
 )
 
 type trafficKeyPair struct {
@@ -35,11 +36,11 @@ func (s *Session) Save(path string) error {
 	}
 	buf.Write(ticketBytes)
 
-	return ioutil.WriteFile(path, buf.Bytes(), 0644)
+	return os.WriteFile(path, buf.Bytes(), 0644)
 }
 
 func LoadSession(path string) (*Session, error) {
-	sessionBytes, err := ioutil.ReadFile(path)
+	sessionBytes, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -55,7 +56,7 @@ func LoadSession(path string) (*Session, error) {
 		return nil, err
 	}
 
-	ticketBytes, err := ioutil.ReadAll(r)
+	ticketBytes, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}

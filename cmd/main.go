@@ -1,7 +1,13 @@
 package main
 
 import (
-	"encoding/hex"
+	// "encoding/hex"
+	"compress/flate"
+	"bufio"
+	"bytes"
+	"fmt"
+	"io"
+	"net/http"
 
 	"github.com/duo/gommtls/mmtls"
 	log "github.com/sirupsen/logrus"
@@ -53,6 +59,41 @@ func main() {
 			panic(err)
 		}
 
-		log.Debugf("Response:\n%s\n", hex.Dump(response))
+		// log.Debugf("Response:\n%s\n", hex.Dump(response))
+
+		parseHTTPResponseFromHex(response)
 	}
+}
+
+
+func parseHTTPResponseFromHex(data []byte) (*http.Response, error) {
+	// 2. 使用net/http解析响应
+	resp, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(data)), nil)
+	if err != nil {
+		log.Errorf("parse http response error: %v", err)
+		return nil, err
+	}
+	fmt.Printf("Status: %s\n", resp.Status)
+    fmt.Printf("StatusCode: %d\n", resp.StatusCode)
+    fmt.Printf("Proto: %s\n", resp.Proto)
+	respHeaders := resp.Header
+	for key, value := range respHeaders {
+		   fmt.Printf("Header: %s: %v\n", key, value)
+	}
+
+	var reader io.ReadCloser
+	// 处理 deflate 压缩
+	if resp.Header.Get("Content-Encoding") == "deflate" {
+		reader = flate.NewReader(resp.Body)
+	} else {
+		reader = resp.Body
+	}
+    
+    // 读取响应体
+    body, _ := io.ReadAll(reader)
+    fmt.Printf("Body: %s\n", body)
+    
+    defer resp.Body.Close()
+
+	return resp, nil
 }

@@ -119,14 +119,14 @@ func (r *mmtlsRecord) encrypt(keys *trafficKeyPair, clientSeqNum uint32) error {
 	copy(nonce, keys.clientNonce)
 	xorNonce(nonce, clientSeqNum)
 
-	auddit := make([]byte, 13)
-	binary.BigEndian.PutUint64(auddit, uint64(clientSeqNum))
-	auddit[8] = r.recordType
-	binary.BigEndian.PutUint16(auddit[9:], r.version)
+	additionalData := make([]byte, 13)
+	binary.BigEndian.PutUint64(additionalData, uint64(clientSeqNum))
+	additionalData[8] = r.recordType
+	binary.BigEndian.PutUint16(additionalData[9:], r.version)
 	// GCM add 16-byte tag
-	binary.BigEndian.PutUint16(auddit[11:], r.length+16)
+	binary.BigEndian.PutUint16(additionalData[11:], r.length+16)
 
-	dst := aead.Seal(nil, nonce, r.data, auddit)
+	dst := aead.Seal(nil, nonce, r.data, additionalData)
 
 	log.Debugf("Encrypt(%d/%d):\n%s\n", len(r.data), len(dst), hex.Dump(dst))
 
@@ -149,13 +149,13 @@ func (r *mmtlsRecord) decrypt(keys *trafficKeyPair, serverSeqNum uint32) error {
 	nonce := make([]byte, 12)
 	copy(nonce, keys.serverNonce)
 	xorNonce(nonce, serverSeqNum)
-	auddit := make([]byte, 13)
-	binary.BigEndian.PutUint64(auddit, uint64(serverSeqNum))
-	auddit[8] = r.recordType
-	binary.BigEndian.PutUint16(auddit[9:], r.version)
-	binary.BigEndian.PutUint16(auddit[11:], r.length)
+	additionalData := make([]byte, 13)
+	binary.BigEndian.PutUint64(additionalData, uint64(serverSeqNum))
+	additionalData[8] = r.recordType
+	binary.BigEndian.PutUint16(additionalData[9:], r.version)
+	binary.BigEndian.PutUint16(additionalData[11:], r.length)
 
-	dst, err := aead.Open(nil, nonce, r.data, auddit)
+	dst, err := aead.Open(nil, nonce, r.data, additionalData)
 	if err != nil {
 		return err
 	}
