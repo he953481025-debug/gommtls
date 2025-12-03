@@ -12,7 +12,7 @@ import (
 
 type dataRecord struct {
 	dataType uint32
-	seq      uint32
+	cmdId      uint32
 	data     []byte
 }
 
@@ -31,7 +31,7 @@ func (d *dataRecord) serialize() []byte {
 	binary.BigEndian.PutUint16(buf[4:], 0x10)
 	binary.BigEndian.PutUint16(buf[6:], 0x1)
 	binary.BigEndian.PutUint32(buf[8:], d.dataType)
-	binary.BigEndian.PutUint32(buf[12:], d.seq)
+	binary.BigEndian.PutUint32(buf[12:], d.cmdId)
 
 	if length > 16 {
 		copy(buf[16:], d.data)
@@ -51,7 +51,7 @@ func createHandshakeRecord(data []byte) *mmtlsRecord {
 func createDataRecord(dataType uint32, seq uint32, data []byte) *mmtlsRecord {
 	r := &dataRecord{
 		dataType: dataType,
-		seq:      seq,
+		cmdId:      seq,
 		data:     data,
 	}
 	return createRecord(MagicRecord, r.serialize())
