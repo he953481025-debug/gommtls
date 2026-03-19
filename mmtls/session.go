@@ -2,8 +2,8 @@ package mmtls
 
 import (
 	"bytes"
-	"os"
 	"io"
+	"os"
 )
 
 type trafficKeyPair struct {

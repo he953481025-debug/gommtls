@@ -12,7 +12,7 @@ import (
 
 type dataRecord struct {
 	dataType uint32
-	cmdId      uint32
+	cmdId    uint32
 	data     []byte
 }
 
@@ -51,7 +51,7 @@ func createHandshakeRecord(data []byte) *mmtlsRecord {
 func createDataRecord(dataType uint32, seq uint32, data []byte) *mmtlsRecord {
 	r := &dataRecord{
 		dataType: dataType,
-		cmdId:      seq,
+		cmdId:    seq,
 		data:     data,
 	}
 	return createRecord(MagicRecord, r.serialize())

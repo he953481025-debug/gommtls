@@ -26,7 +26,7 @@ func newECDHEHello(cliPubKey *ecdsa.PublicKey, cliVerKey *ecdsa.PublicKey) *clie
 	ch.cipherSuites = []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256}
 
 	ch.extensions = make(map[uint16][][]byte)
-	
+
 	cliPubKeyBytes, _ := cliPubKey.Bytes()
 	verifyKeyBytes, _ := cliVerKey.Bytes()
 	ch.extensions[tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256] = [][]byte{

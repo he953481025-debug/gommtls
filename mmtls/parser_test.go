@@ -389,10 +389,10 @@ func TestParseServerResponse(t *testing.T) {
 	shPayload = append(shPayload, serverRandom...)
 	// extensions: pkgLen(4B) + count(1B) + extPkgLen(4B) + extType(2B) + arrayIdx(4B) + keyLen(2B) + ecPoint(65B)
 	ecPoint := make([]byte, 65)
-	ecPoint[0] = 0x04 // uncompressed
+	ecPoint[0] = 0x04                                                   // uncompressed
 	copy(ecPoint[1:], []byte{0xfa, 0xe3, 0xdc, 0x03, 0x4a, 0x21, 0xd9}) // sample bytes
-	extInnerLen := uint32(2 + 4 + 2 + 65) // extType + arrayIdx + keyLen + ecPoint
-	extPkgLen := uint32(4 + extInnerLen)   // extPkgLen field + inner
+	extInnerLen := uint32(2 + 4 + 2 + 65)                               // extType + arrayIdx + keyLen + ecPoint
+	extPkgLen := uint32(4 + extInnerLen)                                // extPkgLen field + inner
 	// extensions package length
 	shPayload = append(shPayload,
 		byte(extPkgLen>>24), byte(extPkgLen>>16), byte(extPkgLen>>8), byte(extPkgLen))

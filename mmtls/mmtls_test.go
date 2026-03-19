@@ -2,9 +2,7 @@ package mmtls
 
 import (
 	"testing"
-
 )
-
 
 func Test1RTTECDHEHandshake(t *testing.T) {
 	longLinkClient := NewMMTLSClient()
@@ -23,7 +21,7 @@ func Test1RTTECDHEHandshake(t *testing.T) {
 
 func Test1RTTPskHandshake(t *testing.T) {
 	longLinkClient := NewMMTLSClient()
-	session, err := LoadSession("../session")
+	session, err := LoadSession("../session_long")
 	if err != nil {
 		t.Fatalf("1-RTT PSK load session error %v", err)
 	}
@@ -40,4 +38,3 @@ func Test1RTTPskHandshake(t *testing.T) {
 	}
 	t.Logf("1-RTT PSK  Send noop success")
 }
-

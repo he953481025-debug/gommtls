@@ -1,17 +1,11 @@
 package main
 
 import (
-	// "encoding/hex"
-	// "bufio"
-	// "bytes"
-	// "compress/flate"
-	// "fmt"
-	// "io"
-	// "net/http"
 	"sync"
 	"time"
-	"github.com/duo/gommtls/utils"
+
 	"github.com/duo/gommtls/mmtls"
+	"github.com/duo/gommtls/utils"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -33,7 +27,7 @@ func main() {
 
 		defer client.Close()
 
-		if session, err := mmtls.LoadSession("session"); err == nil {
+		if session, err := mmtls.LoadSession("session_long"); err == nil {
 			client.Session = session
 		}
 
@@ -42,7 +36,7 @@ func main() {
 		}
 
 		if client.Session != nil {
-			client.Session.Save("session")
+			client.Session.Save("session_long")
 		}
 
 		go func() {
@@ -53,18 +47,20 @@ func main() {
 				}
 				time.Sleep(time.Duration(30) * time.Second)
 			}
-		}()	
+		}()
 	}
 
 	{
 		client := mmtls.NewMMTLSClientShort()
 
-		if session, err := mmtls.LoadSession("session"); err == nil {
+		// Try to load short-link's own session
+		if session, err := mmtls.LoadSession("session_short"); err == nil {
 			client.Session = session
 		}
 
 		defer client.Close()
 
+		// Request() will auto-handshake if no session exists
 		response, err := client.Request(
 			"dns.weixin.qq.com.cn",
 			"/cgi-bin/micromsg-bin/newgetdns",
@@ -74,12 +70,13 @@ func main() {
 			panic(err)
 		}
 
-		// log.Debugf("Response:\n%s\n", hex.Dump(response))
-		
+		// Save short-link session for future 0-RTT
+		if client.Session != nil {
+			client.Session.Save("session_short")
+		}
+
 		utils.ParseHTTPResponseFromByte(response)
-		// parseHTTPResponseFromByte(response)
-		
+
 		wg.Wait()
 	}
 }
-

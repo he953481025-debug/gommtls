@@ -1,13 +1,12 @@
 package utils
 
-import 
-(
-	"net/http"
-	"fmt"
-	"io"
+import (
 	"bufio"
 	"bytes"
 	"compress/flate"
+	"fmt"
+	"io"
+	"net/http"
 )
 
 func ParseHTTPResponseFromByte(data []byte) (*http.Response, error) {

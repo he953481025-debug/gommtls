@@ -3,7 +3,7 @@ package mmtls
 import (
 	"bufio"
 	"bytes"
-	"crypto/hmac"
+	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sync/atomic"
 
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/crypto/hkdf"
@@ -24,6 +25,11 @@ import (
 type MMTLSClientShort struct {
 	conn net.Conn
 
+	status int32
+
+	publicEcdh *ecdsa.PrivateKey
+	verifyEcdh *ecdsa.PrivateKey
+	serverEcdh *ecdsa.PublicKey
 
 	packetReader io.Reader
 
@@ -43,20 +49,201 @@ func NewMMTLSClientShort() *MMTLSClientShort {
 	return c
 }
 
+// Handshake performs a 1-RTT ECDHE handshake over a single HTTP request-response.
+// This allows the short-link client to establish its own independent session
+// without depending on a long-link client.
+func (c *MMTLSClientShort) Handshake(host string) error {
+	if c.handshakeComplete() {
+		return nil
+	}
+
+	c.reset()
+
+	pub, verify, err := generateKeyPairs()
+	if err != nil {
+		return err
+	}
+	c.publicEcdh = pub
+	c.verifyEcdh = verify
+
+	ch := newECDHEHello(&c.publicEcdh.PublicKey, &c.verifyEcdh.PublicKey)
+	helloPart := ch.serialize()
+
+	c.handshakeHasher.Write(helloPart)
+
+	// Pack ClientHello into HTTP POST
+	helloRecord := createHandshakeRecord(helloPart)
+	tlsPayload := helloRecord.serialize()
+	c.clientSeqNum++
+
+	header, err := c.buildRequestHeader(host, len(tlsPayload))
+	if err != nil {
+		return err
+	}
+	httpPacket := append(header, tlsPayload...)
+
+	// Send
+	conn, err := net.Dial("tcp", net.JoinHostPort(host, "80"))
+	if err != nil {
+		return err
+	}
+
+	if _, err := conn.Write(httpPacket); err != nil {
+		conn.Close()
+		return err
+	}
+
+	response, err := c.parseResponse(conn)
+	conn.Close()
+	if err != nil {
+		return err
+	}
+	log.Debugf("Handshake response(%d):\n%s\n", len(response), hex.Dump(response))
+
+	c.packetReader = bytes.NewReader(response)
+
+	// ServerHello (plaintext)
+	serverHelloRecord, err := readRecord(c.packetReader)
+	if err != nil {
+		return fmt.Errorf("read ServerHello: %w", err)
+	}
+	c.handshakeHasher.Write(serverHelloRecord.data)
+	c.serverSeqNum++
+
+	sh, err := readServerHello(serverHelloRecord.data)
+	if err != nil {
+		return fmt.Errorf("parse ServerHello: %w", err)
+	}
+	c.serverEcdh = sh.publicKey
+
+	// DH compute key
+	comKey := computeEphemeralSecret(
+		c.serverEcdh.X,
+		c.serverEcdh.Y,
+		c.publicEcdh.D)
+
+	// Handshake traffic key (56 bytes: client key+nonce, server key+nonce)
+	trafficKey, err := computeTrafficKeyN(
+		comKey,
+		buildHkdfInfo("handshake key expansion", c.handshakeHasher),
+		56)
+	if err != nil {
+		return fmt.Errorf("compute traffic key: %w", err)
+	}
+
+	// Signature record (encrypted)
+	sigRecord, err := readRecord(c.packetReader)
+	if err != nil {
+		return fmt.Errorf("read Signature: %w", err)
+	}
+	if err := sigRecord.decrypt(trafficKey, c.serverSeqNum); err != nil {
+		return fmt.Errorf("decrypt Signature: %w", err)
+	}
+	sig, err := readSignature(sigRecord.data)
+	if err != nil {
+		return fmt.Errorf("parse Signature: %w", err)
+	}
+	if !verifyEcdsaSignature(c.handshakeHasher, sig.EcdsaSignature) {
+		return errors.New("verify ECDSA signature failed")
+	}
+	c.handshakeHasher.Write(sigRecord.data)
+	c.serverSeqNum++
+
+	// NewSessionTicket (encrypted)
+	ticketRecord, err := readRecord(c.packetReader)
+	if err != nil {
+		return fmt.Errorf("read SessionTicket: %w", err)
+	}
+	if err := ticketRecord.decrypt(trafficKey, c.serverSeqNum); err != nil {
+		return fmt.Errorf("decrypt SessionTicket: %w", err)
+	}
+	tickets, err := readNewSessionTicket(ticketRecord.data)
+	if err != nil {
+		return fmt.Errorf("parse SessionTicket: %w", err)
+	}
+
+	pskAccess := make([]byte, 32)
+	hkdf.Expand(
+		sha256.New,
+		comKey,
+		buildHkdfInfo("PSK_ACCESS", c.handshakeHasher)).Read(pskAccess)
+	log.Debugf("Short PSK_ACCESS:\n%s\n", hex.Dump(pskAccess))
+
+	pskRefresh := make([]byte, 32)
+	hkdf.Expand(
+		sha256.New,
+		comKey,
+		buildHkdfInfo("PSK_REFRESH", c.handshakeHasher)).Read(pskRefresh)
+	log.Debugf("Short PSK_REFRESH:\n%s\n", hex.Dump(pskRefresh))
+
+	c.Session = &Session{
+		tk:         tickets,
+		pskAccess:  pskAccess,
+		pskRefresh: pskRefresh,
+	}
+
+	c.handshakeHasher.Write(ticketRecord.data)
+	c.serverSeqNum++
+
+	// ServerFinish (encrypted)
+	sfRecord, err := readRecord(c.packetReader)
+	if err != nil {
+		return fmt.Errorf("read ServerFinish: %w", err)
+	}
+	if err := sfRecord.decrypt(trafficKey, c.serverSeqNum); err != nil {
+		return fmt.Errorf("decrypt ServerFinish: %w", err)
+	}
+
+	sf, err := ReadServerFinish(sfRecord.data)
+	if err != nil {
+		return fmt.Errorf("parse ServerFinish: %w", err)
+	}
+
+	sfKey := make([]byte, 32)
+	hkdf.Expand(
+		sha256.New,
+		comKey,
+		buildHkdfInfo("server finished", nil)).Read(sfKey)
+
+	securityParam := computeHmac(sfKey, c.handshakeHasher.Sum(nil))
+	if !bytes.Equal(sf.data, securityParam) {
+		return errors.New("ServerFinish verification failed")
+	}
+
+	c.serverSeqNum++
+
+	// No ClientFinish for short-link (connection ends here)
+	atomic.StoreInt32(&c.status, 1)
+
+	log.Info("Short-link ECDHE handshake complete")
+
+	return nil
+}
+
+func (c *MMTLSClientShort) ensureSession(host string) error {
+	if c.Session != nil {
+		return nil
+	}
+	return c.Handshake(host)
+}
+
 func (c *MMTLSClientShort) Request(host, path string, req []byte) ([]byte, error) {
-	log.Info("0-RTT PSK handshake")
-	if c.Session == nil {
-		return nil, errors.New("0-RTT requires session")
+	if err := c.ensureSession(host); err != nil {
+		return nil, fmt.Errorf("ensure session: %w", err)
 	}
 
-	if c.conn == nil {
-		conn, err := net.Dial("tcp", net.JoinHostPort(host, "80"))
-		if err != nil {
-			return nil, err
-		}
+	log.Info("0-RTT PSK request")
 
-		c.conn = conn
+	conn, err := net.Dial("tcp", net.JoinHostPort(host, "80"))
+	if err != nil {
+		return nil, err
 	}
+	c.conn = conn
+
+	// Reset seq nums for new 0-RTT request
+	c.handshakeHasher.Reset()
+	c.clientSeqNum = 0
+	c.serverSeqNum = 0
 
 	httpPacket, err := c.packHttp(host, path, req)
 	if err != nil {
@@ -82,7 +269,7 @@ func (c *MMTLSClientShort) Request(host, path string, req []byte) ([]byte, error
 	// trafffic key
 	trafficKey, err := c.computeTrafficKey(
 		c.Session.pskAccess,
-		c.hkdfExpand("handshake key expansion", c.handshakeHasher))
+		buildHkdfInfo("handshake key expansion", c.handshakeHasher))
 	if err != nil {
 		return nil, err
 	}
@@ -112,6 +299,16 @@ func (c *MMTLSClientShort) Close() error {
 	return nil
 }
 
+func (c *MMTLSClientShort) handshakeComplete() bool {
+	return atomic.LoadInt32(&c.status) == 1
+}
+
+func (c *MMTLSClientShort) reset() {
+	c.handshakeHasher.Reset()
+	c.clientSeqNum = 0
+	c.serverSeqNum = 0
+}
+
 func (c *MMTLSClientShort) packHttp(host, path string, req []byte) ([]byte, error) {
 	tlsPayload := make([]byte, 0)
 
@@ -126,7 +323,7 @@ func (c *MMTLSClientShort) packHttp(host, path string, req []byte) ([]byte, erro
 
 	c.handshakeHasher.Write(helloPart)
 
-	earlyKey, _ := c.earlyDataKey(c.Session.pskAccess, &c.Session.tk.tickets[0])
+	earlyKey, _ := c.earlyDataKey(c.Session.pskAccess)
 
 	tlsPayload = append(tlsPayload, createSystemRecord(helloPart).serialize()...)
 	c.clientSeqNum++
@@ -295,11 +492,11 @@ func (c *MMTLSClientShort) readAbort() error {
 	return nil
 }
 
-func (c *MMTLSClientShort) earlyDataKey(pskAccess []byte, ticket *sessionTicket) (*trafficKeyPair, error) {
+func (c *MMTLSClientShort) earlyDataKey(pskAccess []byte) (*trafficKeyPair, error) {
 	trafficKey := make([]byte, 28)
 
 	if _, err := hkdf.Expand(sha256.New, pskAccess,
-		c.hkdfExpand("early data key expansion", c.handshakeHasher)).
+		buildHkdfInfo("early data key expansion", c.handshakeHasher)).
 		Read(trafficKey); err != nil {
 		return nil, err
 	}
@@ -313,32 +510,5 @@ func (c *MMTLSClientShort) earlyDataKey(pskAccess []byte, ticket *sessionTicket)
 }
 
 func (c *MMTLSClientShort) computeTrafficKey(shareKey, info []byte) (*trafficKeyPair, error) {
-	trafficKey := make([]byte, 28)
-
-	if _, err := hkdf.Expand(sha256.New, shareKey,
-		c.hkdfExpand("handshake key expansion", c.handshakeHasher)).
-		Read(trafficKey); err != nil {
-		return nil, err
-	}
-
-	// handshake key expansion
-	pair := &trafficKeyPair{}
-	pair.serverKey = trafficKey[:16]
-	pair.serverNonce = trafficKey[16:]
-
-	return pair, nil
-}
-
-func (c *MMTLSClientShort) hkdfExpand(prefix string, hash hash.Hash) []byte {
-	info := []byte(prefix)
-	if hash != nil {
-		info = append(info, hash.Sum(nil)...)
-	}
-	return info
-}
-
-func (c *MMTLSClientShort) hmac(k []byte, d []byte) []byte {
-	hm := hmac.New(sha256.New, k)
-	hm.Write(d)
-	return hm.Sum(nil)
+	return computeTrafficKeyN(shareKey, info, 28)
 }

@@ -3,9 +3,6 @@ package mmtls
 import (
 	"bytes"
 	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -18,10 +15,6 @@ import (
 
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/crypto/hkdf"
-)
-
-var (
-	curve = elliptic.P256()
 )
 
 type MMTLSClient struct {
@@ -390,64 +383,32 @@ func (c *MMTLSClient) readRecord() (*mmtlsRecord, error) {
 	return readRecord(bytes.NewReader(append(header, payload...)))
 }
 
-func (c *MMTLSClient) computeEphemeralSecret(x, y, z *big.Int) []byte {
-	r, _ := curve.ScalarMult(x, y, z.Bytes())
-	s := sha256.Sum256(r.Bytes())
-	return s[:]
+func (c *MMTLSClient) computeEphemeralSecret(x, y *big.Int, z *big.Int) []byte {
+	return computeEphemeralSecret(x, y, z)
 }
 
 func (c *MMTLSClient) computeTrafficKey(shareKey, info []byte) (*trafficKeyPair, error) {
-	trafficKey := make([]byte, 56)
-	if _, err := hkdf.Expand(sha256.New, shareKey, info).Read(trafficKey); err != nil {
-		return nil, err
-	}
-
-	log.Debugf("TrafficKey:\n%s\n", hex.Dump(trafficKey))
-
-	pair := &trafficKeyPair{}
-	pair.clientKey = trafficKey[:16]
-	pair.serverKey = trafficKey[16:32]
-	pair.clientNonce = trafficKey[32:44]
-	pair.serverNonce = trafficKey[44:]
-
-	return pair, nil
+	return computeTrafficKeyN(shareKey, info, 56)
 }
 
 func (c *MMTLSClient) verifyEcdsa(data []byte) bool {
-	dataHash := sha256.Sum256(c.handshakeHasher.Sum(nil))
-	return ecdsa.VerifyASN1(ServerEcdh, dataHash[:], data)
+	return verifyEcdsaSignature(c.handshakeHasher, data)
 }
 
 func (c *MMTLSClient) hkdfExpand(prefix string, hash hash.Hash) []byte {
-	info := []byte(prefix)
-	if hash != nil {
-		info = append(info, hash.Sum(nil)...)
-	}
-	return info
+	return buildHkdfInfo(prefix, hash)
 }
 
 func (c *MMTLSClient) hmac(k []byte, d []byte) []byte {
-	hm := hmac.New(sha256.New, k)
-	hm.Write(d)
-	return hm.Sum(nil)
+	return computeHmac(k, d)
 }
 
 func (c *MMTLSClient) genKeyPairs() error {
-	if c.publicEcdh == nil {
-		public, err := ecdsa.GenerateKey(curve, rand.Reader)
-		if err != nil {
-			return err
-		}
-		c.publicEcdh = public
+	pub, verify, err := generateKeyPairs()
+	if err != nil {
+		return err
 	}
-
-	if c.verifyEcdh == nil {
-		verify, err := ecdsa.GenerateKey(curve, rand.Reader)
-		if err != nil {
-			return err
-		}
-		c.verifyEcdh = verify
-	}
-
+	c.publicEcdh = pub
+	c.verifyEcdh = verify
 	return nil
 }
