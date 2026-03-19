@@ -85,7 +85,7 @@ func (c *MMTLSClient) Handshake(host string) error {
 		serverHello.publicKey.Y,
 		c.publicEcdh.D)
 
-	// trafffic key
+	// traffic key
 	trafficKey, err := c.computeTrafficKey(
 		comKey,
 		c.hkdfExpand("handshake key expansion", c.handshakeHasher))
@@ -280,7 +280,7 @@ func (c *MMTLSClient) readServerFinish(comKey []byte, trafficKey *trafficKeyPair
 
 	securityParam := c.hmac(sfKey, c.handshakeHasher.Sum(nil))
 
-	if bytes.Compare(sf.data, securityParam) != 0 {
+	if !bytes.Equal(sf.data, securityParam) {
 		return errors.New("security key not compare")
 	}
 

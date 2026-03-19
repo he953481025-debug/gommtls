@@ -221,7 +221,7 @@ func (c *MMTLSClientShort) Handshake(host string) error {
 }
 
 func (c *MMTLSClientShort) ensureSession(host string) error {
-	if c.Session != nil {
+	if c.Session != nil && len(c.Session.tk.tickets) > 0 && len(c.Session.pskAccess) > 0 {
 		return nil
 	}
 	return c.Handshake(host)
@@ -238,7 +238,7 @@ func (c *MMTLSClientShort) Request(host, path string, req []byte) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	c.conn = conn
+	defer conn.Close()
 
 	// Reset seq nums for new 0-RTT request
 	c.handshakeHasher.Reset()
@@ -250,11 +250,11 @@ func (c *MMTLSClientShort) Request(host, path string, req []byte) ([]byte, error
 		return nil, err
 	}
 
-	_, err = c.conn.Write(httpPacket)
+	_, err = conn.Write(httpPacket)
 	if err != nil {
 		return nil, err
 	}
-	response, err := c.parseResponse(c.conn)
+	response, err := c.parseResponse(conn)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +266,7 @@ func (c *MMTLSClientShort) Request(host, path string, req []byte) ([]byte, error
 		return nil, err
 	}
 
-	// trafffic key
+	// traffic key
 	trafficKey, err := c.computeTrafficKey(
 		c.Session.pskAccess,
 		buildHkdfInfo("handshake key expansion", c.handshakeHasher))
